@@ -1,4 +1,3 @@
-
 import streamlit as st
 from io import BytesIO
 import base64
@@ -13,18 +12,15 @@ st.write("Quickly summarize news articles with sentiment analysis.")
 def try_transformers_summarize(text, max_length=60, min_length=30):
     try:
         from transformers import pipeline
-        # try a popular summarization model; user can change to a different model locally
-        summarizer = pipeline("summarization", model="google/pegasus-xsum", device=0 if os.getenv('USE_GPU') else -1)
+        summarizer = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6", device=-1)
         summary = summarizer(text, max_length=max_length, min_length=min_length, do_sample=False)
         return summary[0]['summary_text']
     except Exception as e:
-        # raise to allow fallback
         raise e
 
 def gensim_summarize(text, word_count=50):
     try:
         from gensim.summarization import summarize
-        # gensim's summarize sometimes raises errors on short texts
         return summarize(text, word_count=word_count)
     except Exception:
         raise
@@ -33,13 +29,11 @@ def freq_based_summarize(text, word_count=50):
     import re
     from collections import Counter
     from heapq import nlargest
-    # Simple frequency-based extractive summarizer
     sentences = [s.strip() for s in re.split(r'(?<=[.!?]) +', text) if s.strip()]
     if not sentences:
         return ""
     words = re.findall(r'\w+', text.lower())
     freq = Counter(words)
-    # normalize
     maxf = max(freq.values())
     for k in freq:
         freq[k] = freq[k] / maxf
@@ -48,7 +42,6 @@ def freq_based_summarize(text, word_count=50):
         s_words = re.findall(r'\w+', s.lower())
         score = sum(freq.get(w, 0) for w in s_words)
         sentence_scores[s] = score / (len(s_words)+1)
-    # pick top sentences until approx words reached
     ranked = nlargest(len(sentences), sentence_scores, key=sentence_scores.get)
     summary = []
     wc = 0
@@ -57,26 +50,23 @@ def freq_based_summarize(text, word_count=50):
         wc += len(s.split())
         if wc >= word_count:
             break
-    return ' '.join(summary[:3])  # keep it short
+    return ' '.join(summary[:3])
 
 # Sentiment functions
 def try_transformers_sentiment(text):
     try:
         from transformers import pipeline
         sentiment = pipeline("sentiment-analysis")
-        out = sentiment(text[:512])  # limit length for speed
+        out = sentiment(text[:512])
         return out[0]['label'], out[0].get('score', None)
     except Exception:
         raise
 
 def vader_sentiment(text):
     try:
-        from nltk.sentiment import SentimentIntensityAnalyzer
         import nltk
-        try:
-            nltk.data.find('sentiment/vader_lexicon.zip')
-        except Exception:
-            nltk.download('vader_lexicon')
+        nltk.download('vader_lexicon')
+        from nltk.sentiment import SentimentIntensityAnalyzer
         sia = SentimentIntensityAnalyzer()
         score = sia.polarity_scores(text)
         compound = score['compound']
@@ -89,7 +79,6 @@ def vader_sentiment(text):
     except Exception:
         raise
 
-# Fallback simple lexicon sentiment
 _positive_words = set(["good","great","positive","growth","up","increase","benefit","improve","improved","win","success","beneficial"])
 _negative_words = set(["bad","decline","down","loss","negative","drop","fail","failure","concern","problem","risk"])
 def simple_lexicon_sentiment(text):
@@ -115,30 +104,24 @@ with st.container():
         generate = st.button("Generate Brief", type="primary")
 
     with cols[1]:
-        st.write("‎")  # spacer
+        st.write("‎")
         st.info("Summary length options: choose how long you want the brief to be.")
 
 if generate and text.strip():
     with st.spinner("Generating summary..."):
         summary = ""
-        # try transformers PEGASUS/BART first
         try:
-            # compute approximate token lengths for min/max
             max_len = max(30, int(target_words * 1.6))
             min_len = max(10, int(target_words * 0.6))
             summary = try_transformers_summarize(text, max_length=max_len, min_length=min_len)
         except Exception:
-            # try gensim
             try:
                 summary = gensim_summarize(text, word_count=target_words)
             except Exception:
-                # fallback freq-based extractive
                 summary = freq_based_summarize(text, word_count=target_words)
-        # If summary is empty, fallback to short slice
         if not summary:
             summary = ' '.join(text.split()[:target_words]) + ('...' if len(text.split())>target_words else '')
 
-    # Sentiment analysis
     sentiment_label = "Neutral"
     sentiment_score = None
     try:
@@ -149,42 +132,25 @@ if generate and text.strip():
         except Exception:
             sentiment_label, sentiment_score = simple_lexicon_sentiment(summary)
 
-    # Output screen layout
     left, right = st.columns([3,1])
     with left:
         st.subheader("Generated Summary")
         st.write(summary)
-        # copy button via JS
-        copy_js = f"""
-        <button onclick="navigator.clipboard.writeText({repr(summary)})">Copy Summary</button>
-        """
-        st.markdown(copy_js, unsafe_allow_html=True)
-        # download button
         st.download_button("Download Summary", data=summary, file_name="summary.txt", mime="text/plain")
     with right:
         st.subheader("Sentiment Analysis")
-        # colored label
         color = "gray"
         if sentiment_label.lower().startswith('pos'):
             color = "green"
         elif sentiment_label.lower().startswith('neg'):
             color = "red"
-            
         st.markdown(f"<div style='padding:12px;border-radius:6px;background:{color};color:white;text-align:center'>{sentiment_label}</div>", unsafe_allow_html=True)
-
-        
-
         if sentiment_score is not None:
-         st.caption(f"Score: {sentiment_score:.3f}")
+            st.caption(f"Score: {sentiment_score:.3f}")
 
     st.success("Done. You can copy or download the summary.")
 elif generate and not text.strip():
     st.error("Please paste a news article first to generate a summary.")
 
-# Footer / notes
 st.markdown("---")
-st.caption("This prototype attempts to use PEGASUS/BART if available locally. "
-           "If those models are not installed or internet is unavailable, "
-           "the app falls back to lighter extractive methods.")
-
-        
+st.caption("This app uses PEGASUS or BART for summarization if available. If not, lighter extractive methods are used as fallback.")
